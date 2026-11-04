@@ -1396,7 +1396,7 @@ function drawDeskAndAvatar(c, ox, oy, scale, slot, entry, index, tSec, palette) 
   const online = !!entry.online
   const busy = !!entry.busy
   const alpha = online ? 1 : 0.45
-  const pcolor = profileColor(entry.profile) || accent
+  const pcolor = roleColor(entry.profile) || accent
   const S = deskLayout(slot)
 
   c.save()
@@ -1663,7 +1663,7 @@ function drawLoungeAvatar(c, ox, oy, scale, slot, entry, index, tSec, idx, palet
   const { stroke, textSec, textTer, accent, P } = palette
   const online = !!entry.online
   const alpha = online ? 1 : 0.35
-  const pcolor = profileColor(entry.profile) || accent
+  const pcolor = roleColor(entry.profile) || accent
   const pose = loungePose(slot, entry.profile, online ? tSec : 0)
   const project = p => screenPt(ox,oy,...p,scale)
 
@@ -2182,6 +2182,22 @@ function OfficeStatusChip({ ctx, prefs }) {
 }
 
 // Page overview always uses the full response, never the filtered scene/list.
+const ROLE_COLORS = {
+  default: '#e0ac6c',
+  orchestrator: '#6ea8fe',
+  implementer: '#39ff88',
+  explorer: '#5ac8fa',
+  critic: '#ff453a',
+  reviewer: '#bf5af2',
+  designer: '#ff9f0a',
+  tester: '#ffd60a',
+  scribe: '#64d2ff',
+  ops: '#30d158',
+}
+function roleColor(profile) {
+  return ROLE_COLORS[profile] || profileColor(profile) || '#888'
+}
+
 function profileOverview(entries) {
   const list = Array.isArray(entries) ? entries : []
   let working = 0, idle = 0, offline = 0
@@ -2287,7 +2303,7 @@ function OfficeMetric({ label, value, tone }) {
 }
 
 function OfficeDetailPanel({ entry, onClose }) {
-  const pcolor = profileColor(entry.profile) || '#888'
+  const pcolor = roleColor(entry.profile) || '#888'
   const state = entry.busy ? 'busy' : entry.online ? 'idle' : 'offline'
   const [sessionId, setSessionId] = useState(null)
 
@@ -2404,7 +2420,7 @@ function OfficeLeaderboard({ entries, selectedProfile, onSelect }) {
         }),
         jsx('span', {
           className: 'inline-block h-2 w-2 rounded-full shrink-0',
-          style: { backgroundColor: profileColor(entry.profile) || '#888' },
+          style: { backgroundColor: roleColor(entry.profile) || '#888' },
         }),
         jsx('span', {
           className: 'flex-1 min-w-0 truncate text-xs text-[var(--ui-text-secondary)]',
