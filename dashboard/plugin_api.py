@@ -28,6 +28,7 @@ import os
 import sqlite3
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter
@@ -168,6 +169,21 @@ _STATS_SQL = (
     "SUM(CASE WHEN ended_at IS NULL THEN 1 ELSE 0 END), "
     "SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)), "
     "SUM(COALESCE(actual_cost_usd, estimated_cost_usd, 0)), "
+    "MAX(last_activity_at), "
+    "SUM(CASE WHEN started_at IS NOT NULL AND started_at >= ? "
+    "THEN COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) ELSE 0 END), "
+    "SUM(CASE WHEN started_at IS NOT NULL AND started_at >= ? "
+    "THEN COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) ELSE 0 END) "
+    "FROM sessions"
+)
+
+_STATS_SQL_NO_STARTED_AT = (
+    "SELECT "
+    "SUM(CASE WHEN last_activity_at IS NOT NULL AND last_activity_at >= ? "
+    "THEN 1 ELSE 0 END), "
+    "SUM(CASE WHEN ended_at IS NULL THEN 1 ELSE 0 END), "
+    "SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)), "
+    "SUM(COALESCE(actual_cost_usd, estimated_cost_usd, 0)), "
     "MAX(last_activity_at) "
     "FROM sessions"
 )
@@ -187,6 +203,8 @@ def _read_session_stats(profile: str) -> Dict[str, Any]:
         "active_sessions": 0,
         "open_sessions": 0,
         "tokens_total": 0,
+        "today_tokens": 0,
+        "last_24h_tokens": 0,
         "cost_total": 0.0,
         "last_session_activity": None,
     }
@@ -200,8 +218,17 @@ def _read_session_stats(profile: str) -> Dict[str, Any]:
             return result
         try:
             now = time.time()
-            cur = con.execute(_STATS_SQL, (now - 90.0,))
-            row = cur.fetchone()
+            utc_now = datetime.now(timezone.utc)
+            midnight_utc = datetime(
+                utc_now.year, utc_now.month, utc_now.day, tzinfo=timezone.utc
+            ).timestamp()
+            last_24h = now - 86400.0
+            try:
+                cur = con.execute(_STATS_SQL, (now - 90.0, midnight_utc, last_24h))
+                row = cur.fetchone()
+            except sqlite3.OperationalError:
+                cur = con.execute(_STATS_SQL_NO_STARTED_AT, (now - 90.0,))
+                row = cur.fetchone()
         except Exception:
             # Connection may be broken (db replaced, locked hard, schema change).
             _close_ro_conn_unlocked(path)
@@ -209,7 +236,11 @@ def _read_session_stats(profile: str) -> Dict[str, Any]:
 
     if not row:
         return result
-    active, opened, tokens, cost, last_act = row
+    if len(row) == 7:
+        active, opened, tokens, cost, last_act, today_tok, last24h_tok = row
+    else:
+        active, opened, tokens, cost, last_act = row
+        today_tok, last24h_tok = 0, 0
     try:
         if active is not None:
             result["active_sessions"] = int(active)
@@ -217,6 +248,10 @@ def _read_session_stats(profile: str) -> Dict[str, Any]:
             result["open_sessions"] = int(opened)
         if tokens is not None:
             result["tokens_total"] = int(tokens)
+        if today_tok is not None:
+            result["today_tokens"] = int(today_tok)
+        if last24h_tok is not None:
+            result["last_24h_tokens"] = int(last24h_tok)
         if cost is not None:
             result["cost_total"] = float(cost)
         if last_act is not None:
@@ -230,8 +265,11 @@ def _read_session_stats(profile: str) -> Dict[str, Any]:
 
 
 def _read_profile(profile: str) -> Dict[str, Any]:
+    role = "orchestrator" if profile == "default" else profile
     entry: Dict[str, Any] = {
         "profile": profile,
+        "role": role,
+        "virtual": False,
         "active_agents": 0,
         "state": "offline",
         "updated_at": None,
@@ -241,6 +279,8 @@ def _read_profile(profile: str) -> Dict[str, Any]:
         "active_sessions": 0,
         "open_sessions": 0,
         "tokens_total": 0,
+        "today_tokens": 0,
+        "last_24h_tokens": 0,
         "cost_total": 0.0,
         "last_session_activity": None,
     }
@@ -253,6 +293,8 @@ def _read_profile(profile: str) -> Dict[str, Any]:
             "active_sessions": 0,
             "open_sessions": 0,
             "tokens_total": 0,
+            "today_tokens": 0,
+            "last_24h_tokens": 0,
             "cost_total": 0.0,
             "last_session_activity": None,
         }
@@ -376,6 +418,58 @@ def _collect_state() -> List[Dict[str, Any]]:
             return cached[1]
 
     payload = [_read_profile(p) for p in _discover_profiles()]
+    # Inject the 9 fleet roles so the office mirrors the full team.
+    known = {e["profile"] for e in payload}
+    roles = [
+        "orchestrator",
+        "implementer",
+        "explorer",
+        "critic",
+        "reviewer",
+        "designer",
+        "tester",
+        "scribe",
+        "ops",
+    ]
+    # Map existing profiles onto roles where possible:
+    #   default -> orchestrator, ops -> ops
+    role_map = {"orchestrator": "default", "ops": "ops"}
+    for role, profile in role_map.items():
+        if profile in known:
+            for e in payload:
+                if e["profile"] == profile:
+                    e["role"] = role
+                    e["virtual"] = False
+                    break
+    for e in payload:
+        if "role" not in e:
+            e["role"] = "orchestrator" if e.get("profile") == "default" else e.get("profile", "")
+        if "virtual" not in e:
+            e["virtual"] = False
+
+    for role in roles:
+        if not any(e.get("role") == role for e in payload):
+            entry: Dict[str, Any] = {
+                "profile": role,
+                "role": role,
+                "virtual": True,
+                "active_agents": 0,
+                "state": "idle",
+                "updated_at": None,
+                "online": True,
+                "busy": False,
+                "idle_since": None,
+                "active_sessions": 0,
+                "open_sessions": 0,
+                "tokens_total": 0,
+                "today_tokens": 0,
+                "last_24h_tokens": 0,
+                "cost_total": 0.0,
+                "last_session_activity": None,
+            }
+            payload.append(entry)
+    # Guarantee target of exactly 9 desks (orchestrator, implementer, explorer, critic, reviewer, designer, tester, scribe, ops)
+    # If ops profile already present as its own profile, the loop above reuses it.
     with _state_cache_lock:
         _state_cache = (now + _STATE_TTL_SEC, payload)
     return payload

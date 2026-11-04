@@ -2,7 +2,7 @@ name: office-3d
 label: Office 3D
 version: 1.3.0
 description: >-
-  A live isometric office for Hermes Desktop: every profile is a person at a desk.
+  A live isometric office for Hermes Desktop: every fleet role (9) is a person at a desk; virtual entries are presence-only, not telemetry.
   A profile doing real work sits typing at its desk with a lit terminal screen; an
   online-but-idle profile relaxes in the lounge with tea; an offline profile leaves
   an empty desk with a dark monitor. A stat bar aggregates active sessions, tokens

@@ -1,1 +1,13 @@
-{"name":"office-3d","api":"plugin_api.py"}
+{
+  "name": "office-3d",
+  "label": "Office 3D",
+  "description": "Live isometric office view of the Hermes profile gateways",
+  "icon": "Eye",
+  "version": "1.3.0",
+  "tab": {
+    "path": "/office-3d",
+    "position": "after:skills"
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}
